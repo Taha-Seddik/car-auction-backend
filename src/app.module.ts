@@ -9,10 +9,12 @@ import { AuctionController } from './auction/auction.controller';
 
 import { BidService } from './bid/bid.service';
 import { BidController } from './bid/bid.controller';
+import { AuctionGateway } from './auction/auction.gateway';
+import { RedisService } from './redis/redis.service';
 
 @Module({
   imports: [],
   controllers: [UserController, AuctionController, BidController],
-  providers: [PrismaService, UserService, AuctionService, BidService],
+  providers: [PrismaService, UserService, AuctionService, BidService, RedisService, AuctionGateway],
 })
 export class AppModule {}
