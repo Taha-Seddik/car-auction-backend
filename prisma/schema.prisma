@@ -1,6 +1,5 @@
 generator client {
   provider = "prisma-client-js"
-  output   = "../generated/prisma"
 }
 
 datasource db {
@@ -13,7 +12,7 @@ model User {
   username String    @unique
   email    String    @unique
   bids     Bid[]
-  auctions  Auction[] //auctions created by user
+  auctions Auction[] //auctions created by user
 }
 
 model Auction {
@@ -35,6 +34,6 @@ model Bid {
   auctionId Int
   amount    Int
   timestamp DateTime @default(now())
-  user    User    @relation(fields: [userId], references: [id])
-  auction Auction @relation(fields: [auctionId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
+  auction   Auction  @relation(fields: [auctionId], references: [id])
 }
