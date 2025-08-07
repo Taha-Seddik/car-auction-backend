@@ -1,0 +1,35 @@
+version: '3.8'
+services:
+  postgres:
+    image: postgres:17
+    container_name: carauction_postgres
+    environment:
+      POSTGRES_USER: auction_user
+      POSTGRES_PASSWORD: auction_pass
+      POSTGRES_DB: carauction
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    container_name: carauction_redis
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: carauction_rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: auction_user
+      RABBITMQ_DEFAULT_PASS: auction_pass
+    ports:
+      - '5672:5672'
+      - '15672:15672'
+
+volumes:
+  postgres_data:
+  redis_data:
