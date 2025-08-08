@@ -13,16 +13,16 @@ export class AuctionController {
     startingBid: number;
     status?: string;
   }) {
-    return this.auctionService.createAuction(body);
+    return this.auctionService.create(body);
   }
 
   @Get()
   async getAllAuctions() {
-    return this.auctionService.getAllAuctions();
+    return this.auctionService.getAll();
   }
 
   @Get(':id')
   async getAuctionById(@Param('id') id: string) {
-    return this.auctionService.getAuctionById(Number(id));
+    return this.auctionService.getById(Number(id));
   }
 }
