@@ -1,8 +1,7 @@
-# Live Car Auction – MVP (NestJS + Socket.IO + Prisma + Redis + RabbitMQ)
+# Live Car Auction – MVP 
 
-Minimum viable **live bidding** module that shows real-time bids, safe concurrency, and basic protection against spam / DDoS—built to the assessment brief.
-
----
+## Intro
+NestJS backend for real-time car auctions: Socket.IO live bids, PostgreSQL/Prisma transactions, Redis cache/pub-sub, RabbitMQ processing (with DLQ), plus simple guard-based rate limiting. Includes a minimal web client for quick testing
 
 ## Tech Stack
 
@@ -13,9 +12,23 @@ Minimum viable **live bidding** module that shows real-time bids, safe concurren
 - **RabbitMQ** (reliable bid queueing + DLQ + notifications/audit)
 - **Docker Compose** (Postgres, Redis, RabbitMQ)
 
----
+## How to run the project
 
-## Project Structure (important bits)
+```bash
+# 1) Infra
+docker compose up -d
+
+# 2) DB schema
+npx prisma migrate dev
+
+# 3) Seed sample data 
+npx ts-node src/prisma/seed.ts
+
+# 4) App
+npm run start:dev
+```
+
+## Project Structure (important parts)
 
 ```
 src/
@@ -70,21 +83,7 @@ PORT=3000
 
 ---
 
-## Run It (first boot)
 
-```bash
-# 1) Infra
-docker compose up -d           # postgres:5432, redis:6379, rabbitmq:5672 (UI :15672)
-
-# 2) DB schema
-npx prisma migrate dev
-
-# 3) Seed sample data (users, one auction, a couple of bids)
-npx ts-node src/prisma/seed.ts
-
-# 4) App
-npm run start:dev
-```
 
 Quick checks:
 
