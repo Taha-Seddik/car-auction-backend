@@ -1,0 +1,177 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Auction Race Test</title>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 20px;
+      }
+      label {
+        display: block;
+        margin: 6px 0 2px;
+      }
+      input {
+        padding: 6px;
+      }
+      button {
+        padding: 6px 10px;
+        margin-right: 6px;
+      }
+      fieldset {
+        border: 1px solid #ddd;
+        padding: 12px;
+        margin: 14px 0;
+      }
+      legend {
+        padding: 0 6px;
+        color: #555;
+      }
+      pre {
+        height: 300px;
+        overflow: auto;
+        background: #111;
+        color: #eee;
+        padding: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <h3>Auction Race Test</h3>
+
+    <fieldset>
+      <legend>Setup</legend>
+      <label>Auction ID</label>
+      <input id="auctionId" value="1" />
+
+      <label>Number of bidders (N)</label>
+      <input id="num" value="2" />
+
+      <label>Base User ID (each bidder uses base+index)</label>
+      <input id="baseUser" value="1000" />
+
+      <label>Bid amount (same for all)</label>
+      <input id="amount" value="2000" />
+
+      <label>Jitter (ms, max random delay before send)</label>
+      <input id="jitter" value="0" />
+
+      <div style="margin: 12px 0">
+        <button id="connectAll">Connect All</button>
+        <button id="startRace">Start Race</button>
+        <button id="closeAll">Close All</button>
+        <button id="endAuction">End Auction</button>
+      </div>
+    </fieldset>
+
+    <pre id="log" aria-live="polite"></pre>
+
+    <script>
+      const el = (id) => document.getElementById(id);
+      const log = (label, data) => {
+        const ts = new Date().toLocaleTimeString();
+        el('log').textContent +=
+          `[${ts}] ${label}` +
+          (data ? ` → ${JSON.stringify(data)}` : '') +
+          '\n';
+        el('log').scrollTop = el('log').scrollHeight;
+      };
+
+      /** All active sockets here */
+      let sockets = [];
+
+      function mkSocket(userId, auctionId) {
+        const s = io('http://localhost:3000/ws', {
+          transports: ['websocket'],
+          auth: { userId },
+        });
+
+        s.on('connect', () => {
+          log('connected', { userId, sid: s.id });
+          s.emit('joinAuction', { auctionId });
+          log('emit joinAuction', { userId, auctionId });
+        });
+
+        s.on('currentHighest', (d) => log('currentHighest', { userId, ...d }));
+        s.on('bidQueued', (d) => log('bidQueued', { userId, ...d }));
+        s.on('bidUpdate', (d) => log('bidUpdate', { userId, ...d })); // Same update will appear on all sockets
+        s.on('bidError', (d) => log('bidError', { userId, ...d }));
+        s.on('auctionEnd', (d) => log('auctionEnd', { userId, ...d }));
+        s.on('disconnect', (r) => log('disconnect', { userId, reason: r }));
+
+        return s;
+      }
+
+      async function connectAll() {
+        const auctionId = Number(el('auctionId').value || 1);
+        const n = Number(el('num').value || 2);
+        const base = Number(el('baseUser').value || 1000);
+
+        await closeAll(); // clean
+
+        const ready = [];
+        for (let i = 0; i < n; i++) {
+          const uid = base + i;
+          const s = mkSocket(uid, auctionId);
+          sockets.push(s);
+          ready.push(new Promise((res) => s.on('connect', res)));
+        }
+        await Promise.all(ready);
+        log('allConnected', { count: sockets.length });
+      }
+
+      async function startRace() {
+        if (!sockets.length)
+          return log('warn', 'no sockets; click Connect All first');
+
+        const auctionId = Number(el('auctionId').value || 1);
+        const amount = Number(el('amount').value || 0);
+        const jitterMax = Number(el('jitter').value || 0);
+
+        // send from all sockets near-simultaneously
+        const sends = sockets.map((s, idx) => {
+          const userId = (s.io.opts.auth && s.io.opts.auth.userId) || idx;
+          const delay =
+            jitterMax > 0 ? Math.floor(Math.random() * jitterMax) : 0;
+          return new Promise((res) => {
+            setTimeout(() => {
+              const payload = { auctionId, userId, amount };
+              s.emit('placeBid', payload);
+              log('emit placeBid', payload);
+              res();
+            }, delay);
+          });
+        });
+
+        await Promise.all(sends);
+        log('raceSent', { count: sends.length, amount });
+      }
+
+      async function closeAll() {
+        sockets.forEach((s) => {
+          try {
+            s.disconnect();
+          } catch {}
+        });
+        sockets = [];
+        log('closedAll');
+      }
+
+      async function endAuction() {
+        if (!sockets.length)
+          return log('warn', 'no sockets; click Connect All first');
+        const auctionId = Number(el('auctionId').value || 1);
+        sockets[0].emit('endAuction', { auctionId });
+        log('emit endAuction', { auctionId });
+      }
+
+      // wire buttons
+      el('connectAll').addEventListener('click', connectAll);
+      el('startRace').addEventListener('click', startRace);
+      el('closeAll').addEventListener('click', closeAll);
+      el('endAuction').addEventListener('click', endAuction);
+    </script>
+  </body>
+</html>

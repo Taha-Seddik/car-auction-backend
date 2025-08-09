@@ -22,22 +22,26 @@ export class AuctionService {
     });
   }
 
-  async createAuction(input: { carId: string; minutes: number; startingBid: number }) {
-  const now = new Date();
-  const end = new Date(now.getTime() + input.minutes * 60_000);
+  async createAuction(input: {
+    carId: string;
+    minutes: number;
+    startingBid: number;
+  }) {
+    const now = new Date();
+    const end = new Date(now.getTime() + input.minutes * 60_000);
 
-  const auction = await this.prisma.auction.create({
-    data: {
-      carId: input.carId,
-      startTime: now,
-      endTime: end,
-      startingBid: input.startingBid,
-      status: 'active',
-    },
-  });
+    const auction = await this.prisma.auction.create({
+      data: {
+        carId: input.carId,
+        startTime: now,
+        endTime: end,
+        startingBid: input.startingBid,
+        status: 'active',
+      },
+    });
 
-  return auction;
-}
+    return auction;
+  }
 
   async placeBidTx(params: {
     auctionId: number;
@@ -46,9 +50,10 @@ export class AuctionService {
   }) {
     const { auctionId, userId, amount } = params;
 
-    return this.prisma.$transaction(
+    // 1) Short, DB-only transaction
+    const bid = await this.prisma.$transaction(
       async (tx) => {
-        // lock the auction row so two writers can't update at once
+        // lock the row; second writer waits here until first commits
         const [auction] = await tx.$queryRaw<
           Array<{
             id: number;
@@ -57,8 +62,12 @@ export class AuctionService {
             endTime: Date;
             status: string;
           }>
-        >`SELECT id, "currentHighestBid", "startingBid", "endTime", "status"
-        FROM "Auction" WHERE id = ${auctionId} FOR UPDATE`;
+        >`
+          SELECT id, "currentHighestBid", "startingBid", "endTime", "status"
+          FROM "Auction"
+          WHERE id = ${auctionId}
+          FOR UPDATE
+        `;
 
         if (!auction) throw new BadRequestException('Auction not found');
         if (auction.status !== 'active')
@@ -66,43 +75,48 @@ export class AuctionService {
         if (new Date(auction.endTime).getTime() <= Date.now())
           throw new BadRequestException('Auction already ended');
 
-        // new bid must be >= last + 1
+        // must be at least previous + 1
         const minAllowed =
           (auction.currentHighestBid ?? auction.startingBid) + 1;
         if (amount < minAllowed)
           throw new BadRequestException(`Bid must be >= ${minAllowed}`);
 
-        // persist bid
-        const bid = await tx.bid.create({
+        // write bid
+        const created = await tx.bid.create({
           data: { userId, auctionId, amount },
         });
 
-        // update auction's currentHighestBid
+        // update highest
         await tx.auction.update({
           where: { id: auctionId },
           data: { currentHighestBid: amount },
         });
 
-        // cache & pub/sub
-        await this.redis.cache.set(
-          this.redis.auctionKey(auctionId),
-          String(amount),
-        );
-        await this.redis.pub.publish(
-          this.redis.channel(auctionId),
-          JSON.stringify({
-            type: 'bidUpdate',
-            auctionId,
-            amount,
-            userId,
-            timestamp: Date.now(),
-          }),
-        );
-
-        return bid;
+        return created;
       },
-      { isolationLevel: 'Serializable' },
+      {
+        isolationLevel: 'ReadCommitted', // fewer serialization conflicts than 'Serializable'
+        timeout: 10_000, // give a bit more room under lock contention
+      },
     );
+
+    // 2) After commit: cache + pub/sub (non-blocking for the DB tx)
+    await this.redis.cache.set(
+      this.redis.auctionKey(auctionId),
+      String(amount),
+    );
+    await this.redis.pub.publish(
+      this.redis.channel(auctionId),
+      JSON.stringify({
+        type: 'bidUpdate',
+        auctionId,
+        amount,
+        userId,
+        timestamp: Date.now(),
+      }),
+    );
+
+    return bid;
   }
 
   async endAuction(auctionId: number) {

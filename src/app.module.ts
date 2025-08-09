@@ -11,9 +11,11 @@ import { RedisService } from './redis/redis.service';
 import { BidConsumer } from './rabbitMq/bid.consumer';
 import { BidProducer } from './rabbitMq/bid.producer';
 import { RabbitMQService } from './rabbitMq/rabbitmq.service';
+import { ScheduleModule } from '@nestjs/schedule';
+import { AuctionCloserService } from './auction/auction-closer.service';
 
 @Module({
-  imports: [],
+  imports: [ScheduleModule.forRoot()],
   controllers: [UserController, AuctionController, BidController],
   providers: [
     PrismaService,
@@ -25,6 +27,7 @@ import { RabbitMQService } from './rabbitMq/rabbitmq.service';
     RabbitMQService,
     BidProducer,
     BidConsumer,
+    AuctionCloserService
   ],
 })
 export class AppModule {}

@@ -24,12 +24,16 @@ export class BidConsumer implements OnApplicationBootstrap, OnModuleDestroy {
 
   // Start AFTER all providers finished onModuleInit (including RabbitMQService)
   async onApplicationBootstrap() {
-    // consume processing queue
     const c1: Replies.Consume = await this.mq.consume(
       this.mq.Q_BIDS_PROCESS,
       async ({ content, properties }) => {
         const msg = JSON.parse(content.toString()) as BidMsg;
         const retry = Number(properties?.headers?.['x-retry'] ?? 0);
+
+        // log when a bid message is received
+        this.logger.log(
+          `[BID:RECV] a=${msg.auctionId} u=${msg.userId} amt=${msg.amount} retry=${retry}`,
+        );
 
         try {
           await this.auctionService.placeBidTx({
@@ -38,7 +42,12 @@ export class BidConsumer implements OnApplicationBootstrap, OnModuleDestroy {
             amount: Number(msg.amount),
           });
 
-          // notify (fanout)
+          // log accepted
+          this.logger.log(
+            `[BID:ACCEPTED] a=${msg.auctionId} u=${msg.userId} amt=${msg.amount}`,
+          );
+
+          // notify + audit
           this.mq.publish(this.mq.EX_NOTIFY, '', {
             type: 'bidUpdate',
             auctionId: msg.auctionId,
@@ -46,42 +55,47 @@ export class BidConsumer implements OnApplicationBootstrap, OnModuleDestroy {
             amount: msg.amount,
             ts: Date.now(),
           });
-
-          // audit (fanout)
           this.mq.publish(this.mq.EX_AUDIT, '', {
             type: 'bid.processed',
             ...msg,
             processedAt: Date.now(),
           });
-          // ACK is done by RabbitMQService after handler returns
+          // ack happens in RabbitMQService wrapper
         } catch (err: any) {
+          const reason = err?.message || String(err);
           this.logger.warn(
-            `Bid failed (retry=${retry}): ${err?.message || err}`,
+            `[BID:FAIL] a=${msg.auctionId} u=${msg.userId} amt=${msg.amount} retry=${retry} reason="${reason}"`,
           );
 
           if (retry < MAX_RETRIES) {
-            // requeue a fresh copy with incremented retry header, ACK original
+            // NEW: log requeue
+            this.logger.warn(
+              `[BID:REQUEUE] a=${msg.auctionId} u=${msg.userId} amt=${msg.amount} nextRetry=${retry + 1}`,
+            );
             this.mq.publish(
               this.mq.EX_BIDS,
               this.mq.RK_BID_PLACE,
               { ...msg },
               { headers: { 'x-retry': retry + 1 } },
             );
-            return; // success path → original msg gets ACKed by service
+            return; // original will be acked by wrapper
           }
 
-          // too many retries -> throw -> NACK(no requeue) -> DLQ
-          throw err;
+          // NEW: log final reject before DLQ
+          this.logger.error(
+            `[BID:REJECT_FINAL] a=${msg.auctionId} u=${msg.userId} amt=${msg.amount} reason="${reason}"`,
+          );
+          throw err; // wrapper will nack(no requeue) => DLQ
         }
       },
     );
     this.consumerTags.push(c1.consumerTag);
 
-    // observe DLQ for failures
+    // DLQ observer (log only)
     const c2: Replies.Consume = await this.mq.consume(
       this.mq.Q_BIDS_DLQ,
       async ({ content }) => {
-        this.logger.error(`DLQ: ${content.toString()}`);
+        this.logger.error(`[DLQ:MSG] ${content.toString()}`);
       },
     );
     this.consumerTags.push(c2.consumerTag);
