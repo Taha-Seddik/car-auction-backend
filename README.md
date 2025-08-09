@@ -28,8 +28,6 @@ npx ts-node src/prisma/seed.ts
 npm run start:dev
 ```
 
-Here’s a corrected, tidy **Project Structure** section that matches your repo:
-
 # Project Structure (important parts)
 
 ```
