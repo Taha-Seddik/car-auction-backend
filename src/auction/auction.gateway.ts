@@ -11,7 +11,12 @@ import { Server, Socket } from 'socket.io';
 import { AuctionService } from './auction.service';
 import { RedisService } from '../redis/redis.service';
 import { BidProducer } from 'src/rabbitMq/bid.producer';
+import { UseGuards, UseInterceptors } from '@nestjs/common';
+import { WsSecurityGuard } from 'src/common/guards/ws-security.guard';
+import { WsPayloadInterceptor } from 'src/common/interceptors/ws-payload.interceptor';
 
+@UseGuards(WsSecurityGuard)
+@UseInterceptors(WsPayloadInterceptor)
 @WebSocketGateway({
   cors: { origin: '*' },
   namespace: '/ws',
@@ -26,7 +31,10 @@ export class AuctionGateway implements OnGatewayInit, OnGatewayDisconnect {
   ) {}
 
   afterInit() {}
-  handleDisconnect(_client: Socket) {}
+  handleDisconnect(_client: Socket) {
+    // let the guard clean its connection registry
+    WsSecurityGuard.onDisconnect(_client);
+  }
 
   @SubscribeMessage('joinAuction')
   async onJoin(
@@ -79,7 +87,11 @@ export class AuctionGateway implements OnGatewayInit, OnGatewayDisconnect {
     const auctionId = Number(payload.auctionId);
     const userId = Number(payload.userId);
     const amount = Number(payload.amount);
-    if (!Number.isFinite(auctionId) || !Number.isFinite(userId) || !Number.isFinite(amount)) {
+    if (
+      !Number.isFinite(auctionId) ||
+      !Number.isFinite(userId) ||
+      !Number.isFinite(amount)
+    ) {
       client.emit('bidError', { message: 'Invalid bid payload' });
       return { ok: false };
     }
@@ -93,8 +105,10 @@ export class AuctionGateway implements OnGatewayInit, OnGatewayDisconnect {
       client.emit('bidQueued', { ok: true });
       return { ok: true };
     } catch (err: any) {
-      // if publish fails 
-      client.emit('bidError', { message: err?.message ?? 'Failed to queue bid' });
+      // if publish fails
+      client.emit('bidError', {
+        message: err?.message ?? 'Failed to queue bid',
+      });
       return { ok: false, error: 'Failed to queue bid' };
     }
   }
@@ -102,7 +116,9 @@ export class AuctionGateway implements OnGatewayInit, OnGatewayDisconnect {
   @SubscribeMessage('endAuction')
   async onEnd(@MessageBody() payload: { auctionId: number }) {
     // keep direct call for now; you can also queue this if you want
-    const updated = await this.auctionService.endAuction(Number(payload.auctionId));
+    const updated = await this.auctionService.endAuction(
+      Number(payload.auctionId),
+    );
     return {
       status: updated.status,
       winnerId: updated.winnerId,

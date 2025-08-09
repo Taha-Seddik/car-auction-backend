@@ -13,6 +13,8 @@ import { BidProducer } from './rabbitMq/bid.producer';
 import { RabbitMQService } from './rabbitMq/rabbitmq.service';
 import { ScheduleModule } from '@nestjs/schedule';
 import { AuctionCloserService } from './auction/auction-closer.service';
+import { WsSecurityGuard } from './common/guards/ws-security.guard';
+import { WsPayloadInterceptor } from './common/interceptors/ws-payload.interceptor';
 
 @Module({
   imports: [ScheduleModule.forRoot()],
@@ -27,7 +29,9 @@ import { AuctionCloserService } from './auction/auction-closer.service';
     RabbitMQService,
     BidProducer,
     BidConsumer,
-    AuctionCloserService
+    AuctionCloserService,
+    WsSecurityGuard,
+    WsPayloadInterceptor,
   ],
 })
 export class AppModule {}

@@ -1,158 +1,201 @@
 <!doctype html>
 <html>
-<head>
-  <meta charset="utf-8" />
-  <title>Auction WS Minimal Client</title>
-  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-  <style>
-    body { font-family: system-ui, sans-serif; margin: 20px; }
-    label { display:block; margin: 6px 0 2px; }
-    input { padding:6px; }
-    button { padding:6px 10px; margin-right:6px; }
-    fieldset { border:1px solid #ddd; padding:12px; margin:14px 0; }
-    legend { padding:0 6px; color:#555; }
-    pre { height: 260px; overflow: auto; background:#111; color:#eee; padding:10px; }
-  </style>
-</head>
-<body>
-  <h3>Auction WS Minimal Client</h3>
-
-  <fieldset>
-    <legend>Connection & Bidding</legend>
-
-    <label>Auction ID</label>
-    <input id="auctionId" value="1">
-
-    <label>User ID</label>
-    <input id="userId" value="1">
-
-    <label>Bid amount</label>
-    <input id="amount" value="1301">
-
-    <div style="margin:12px 0;">
-      <button id="connectBtn">Connect</button>
-      <button id="bidBtn">Place Bid</button>
-      <button id="endBtn">End Auction</button>
-    </div>
-  </fieldset>
-
-  <fieldset>
-    <legend>Create Auction</legend>
-
-    <label>Car ID</label>
-    <input id="carId" value="car-new-001">
-
-    <label>Duration (minutes)</label>
-    <input id="minutes" value="30">
-
-    <label>Starting Bid</label>
-    <input id="startingBid" value="1000">
-
-    <div style="margin:12px 0;">
-      <button id="createBtn">Create Auction</button>
-    </div>
-  </fieldset>
-
-  <pre id="log" aria-live="polite"></pre>
-
-  <script>
-    let socket;
-
-    const el = (id) => document.getElementById(id);
-    const log = (label, data) => {
-      const ts = new Date().toLocaleTimeString();
-      el('log').textContent += `[${ts}] ${label}` + (data ? ` → ${JSON.stringify(data)}` : '') + '\n';
-      el('log').scrollTop = el('log').scrollHeight;
-    };
-
-    function connect() {
-      const userId = Number(el('userId').value || 1);
-
-      if (socket && socket.connected) socket.disconnect();
-
-      // Connect to namespace "/ws" on port 3000
-      socket = io('http://localhost:3000/ws', {
-        transports: ['websocket'],
-        auth: { userId }
-      });
-
-      socket.on('connect', () => {
-        log('connected', { id: socket.id });
-        const auctionId = Number(el('auctionId').value || 1);
-        socket.emit('joinAuction', { auctionId });
-        log('emit joinAuction', { auctionId });
-      });
-
-      socket.on('disconnect', (reason) => log('disconnect', { reason }));
-      socket.on('connect_error', (err) => log('connect_error', { message: err.message }));
-
-      socket.on('currentHighest', d => log('currentHighest', d));
-      socket.on('bidQueued',      d => log('bidQueued', d));
-      socket.on('bidUpdate',      d => log('bidUpdate', d));
-      socket.on('auctionEnd',     d => log('auctionEnd', d));
-      socket.on('bidError',       d => log('bidError', d));
-
-      // Console helpers
-      window.placeBid = (amount, userIdParam = userId, auctionIdParam = Number(el('auctionId').value || 1)) => {
-        const payload = { auctionId: Number(auctionIdParam), userId: Number(userIdParam), amount: Number(amount) };
-        socket.emit('placeBid', payload);
-        log('emit placeBid', payload);
-      };
-      window.endAuction = (auctionIdParam = Number(el('auctionId').value || 1)) => {
-        const payload = { auctionId: Number(auctionIdParam) };
-        socket.emit('endAuction', payload);
-        log('emit endAuction', payload);
-      };
-    }
-
-    async function createAuction() {
-      const carId = String(el('carId').value || 'car-new-001');
-      const minutes = Number(el('minutes').value || 30);
-      const startingBid = Number(el('startingBid').value || 1000);
-
-      try {
-        const res = await fetch('http://localhost:3000/auctions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ carId, minutes, startingBid }),
-        });
-        if (!res.ok) {
-          const text = await res.text();
-          log('createAuction error', { status: res.status, text });
-          return;
-        }
-        const auction = await res.json();
-        log('createdAuction', auction);
-
-        // Set the new ID and auto-join if connected
-        el('auctionId').value = auction.id;
-        if (socket && socket.connected) {
-          socket.emit('joinAuction', { auctionId: auction.id });
-          log('emit joinAuction', { auctionId: auction.id });
-        }
-      } catch (e) {
-        log('createAuction fetch error', { message: e?.message || String(e) });
+  <head>
+    <meta charset="utf-8" />
+    <title>Auction WS Minimal Client</title>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 20px;
       }
-    }
+      label {
+        display: block;
+        margin: 6px 0 2px;
+      }
+      input {
+        padding: 6px;
+      }
+      button {
+        padding: 6px 10px;
+        margin-right: 6px;
+      }
+      fieldset {
+        border: 1px solid #ddd;
+        padding: 12px;
+        margin: 14px 0;
+      }
+      legend {
+        padding: 0 6px;
+        color: #555;
+      }
+      pre {
+        height: 260px;
+        overflow: auto;
+        background: #111;
+        color: #eee;
+        padding: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <h3>Auction WS Minimal Client</h3>
 
-    // UI bindings
-    el('connectBtn').addEventListener('click', connect);
-    el('bidBtn').addEventListener('click', () => {
-      if (!socket || !socket.connected) return log('warn', 'not connected');
-      const amount = Number(el('amount').value || 0);
-      const userId = Number(el('userId').value || 1);
-      const auctionId = Number(el('auctionId').value || 1);
-      window.placeBid(amount, userId, auctionId);
-    });
-    el('endBtn').addEventListener('click', () => {
-      if (!socket || !socket.connected) return log('warn', 'not connected');
-      const auctionId = Number(el('auctionId').value || 1);
-      window.endAuction(auctionId);
-    });
-    el('createBtn').addEventListener('click', createAuction);
+    <fieldset>
+      <legend>Connection & Bidding</legend>
 
-    // If your server uses a custom *path* instead of a namespace, connect like this instead:
-    // socket = io('http://localhost:3000', { path: '/ws', transports: ['websocket'], auth: { userId } });
-  </script>
-</body>
+      <label>Auction ID</label>
+      <input id="auctionId" value="1" />
+
+      <label>User ID</label>
+      <input id="userId" value="1" />
+
+      <label>Bid amount</label>
+      <input id="amount" value="1301" />
+
+      <div style="margin: 12px 0">
+        <button id="connectBtn">Connect</button>
+        <button id="bidBtn">Place Bid</button>
+        <button id="endBtn">End Auction</button>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Create Auction</legend>
+
+      <label>Car ID</label>
+      <input id="carId" value="car-new-001" />
+
+      <label>Duration (minutes)</label>
+      <input id="minutes" value="30" />
+
+      <label>Starting Bid</label>
+      <input id="startingBid" value="1000" />
+
+      <div style="margin: 12px 0">
+        <button id="createBtn">Create Auction</button>
+      </div>
+    </fieldset>
+
+    <pre id="log" aria-live="polite"></pre>
+
+    <script>
+      let socket;
+
+      const el = (id) => document.getElementById(id);
+      const log = (label, data) => {
+        const ts = new Date().toLocaleTimeString();
+        el('log').textContent +=
+          `[${ts}] ${label}` +
+          (data ? ` → ${JSON.stringify(data)}` : '') +
+          '\n';
+        el('log').scrollTop = el('log').scrollHeight;
+      };
+
+      function connect() {
+        const userId = Number(el('userId').value || 1);
+
+        if (socket && socket.connected) socket.disconnect();
+
+        // Connect to namespace "/ws" on port 3000
+        socket = io('http://localhost:3000/ws', {
+          transports: ['websocket'],
+          auth: { userId },
+        });
+
+        socket.on('connect', () => {
+          log('connected', { id: socket.id });
+          const auctionId = Number(el('auctionId').value || 1);
+          socket.emit('joinAuction', { auctionId });
+          log('emit joinAuction', { auctionId });
+        });
+
+        socket.on('disconnect', (reason) => log('disconnect', { reason }));
+        socket.on('connect_error', (err) =>
+          log('connect_error', { message: err.message }),
+        );
+
+        socket.on('currentHighest', (d) => log('currentHighest', d));
+        socket.on('bidQueued', (d) => log('bidQueued', d));
+        socket.on('bidUpdate', (d) => log('bidUpdate', d));
+        socket.on('auctionEnd', (d) => log('auctionEnd', d));
+        socket.on('bidError', (d) => log('bidError', d));
+        socket.on('tooManyConnections', (d) => log('tooManyConnections', d));
+        socket.on('rateLimited', (d) => log('rateLimited', d));
+
+        // Console helpers
+        window.placeBid = (
+          amount,
+          userIdParam = userId,
+          auctionIdParam = Number(el('auctionId').value || 1),
+        ) => {
+          const payload = {
+            auctionId: Number(auctionIdParam),
+            userId: Number(userIdParam),
+            amount: Number(amount),
+          };
+          socket.emit('placeBid', payload);
+          log('emit placeBid', payload);
+        };
+        window.endAuction = (
+          auctionIdParam = Number(el('auctionId').value || 1),
+        ) => {
+          const payload = { auctionId: Number(auctionIdParam) };
+          socket.emit('endAuction', payload);
+          log('emit endAuction', payload);
+        };
+      }
+
+      async function createAuction() {
+        const carId = String(el('carId').value || 'car-new-001');
+        const minutes = Number(el('minutes').value || 30);
+        const startingBid = Number(el('startingBid').value || 1000);
+
+        try {
+          const res = await fetch('http://localhost:3000/auctions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ carId, minutes, startingBid }),
+          });
+          if (!res.ok) {
+            const text = await res.text();
+            log('createAuction error', { status: res.status, text });
+            return;
+          }
+          const auction = await res.json();
+          log('createdAuction', auction);
+
+          // Set the new ID and auto-join if connected
+          el('auctionId').value = auction.id;
+          if (socket && socket.connected) {
+            socket.emit('joinAuction', { auctionId: auction.id });
+            log('emit joinAuction', { auctionId: auction.id });
+          }
+        } catch (e) {
+          log('createAuction fetch error', {
+            message: e?.message || String(e),
+          });
+        }
+      }
+
+      // UI bindings
+      el('connectBtn').addEventListener('click', connect);
+      el('bidBtn').addEventListener('click', () => {
+        if (!socket || !socket.connected) return log('warn', 'not connected');
+        const amount = Number(el('amount').value || 0);
+        const userId = Number(el('userId').value || 1);
+        const auctionId = Number(el('auctionId').value || 1);
+        window.placeBid(amount, userId, auctionId);
+      });
+      el('endBtn').addEventListener('click', () => {
+        if (!socket || !socket.connected) return log('warn', 'not connected');
+        const auctionId = Number(el('auctionId').value || 1);
+        window.endAuction(auctionId);
+      });
+      el('createBtn').addEventListener('click', createAuction);
+
+      // If your server uses a custom *path* instead of a namespace, connect like this instead:
+      // socket = io('http://localhost:3000', { path: '/ws', transports: ['websocket'], auth: { userId } });
+    </script>
+  </body>
 </html>

@@ -1,0 +1,397 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Auction WS Guard/Throttle Tester</title>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <style>
+      :root {
+        --pad: 10px;
+      }
+      body {
+        font-family:
+          system-ui,
+          -apple-system,
+          Segoe UI,
+          Roboto,
+          sans-serif;
+        margin: 20px;
+      }
+      h2 {
+        margin: 0 0 8px;
+      }
+      fieldset {
+        border: 1px solid #ddd;
+        padding: var(--pad);
+        margin: 14px 0;
+        border-radius: 8px;
+      }
+      legend {
+        padding: 0 6px;
+        color: #555;
+      }
+      label {
+        display: block;
+        margin: 6px 0 2px;
+        font-size: 14px;
+      }
+      input {
+        padding: 8px;
+        width: 220px;
+      }
+      button {
+        padding: 8px 12px;
+        margin: 6px 6px 0 0;
+        cursor: pointer;
+      }
+      .row {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .num {
+        width: 100px;
+      }
+      .wide {
+        width: 300px;
+      }
+      .ok {
+        color: #1a7f37;
+      }
+      .warn {
+        color: #c97d00;
+      }
+      .err {
+        color: #b00020;
+      }
+      .muted {
+        color: #666;
+      }
+      .pill {
+        display: inline-block;
+        padding: 2px 6px;
+        border-radius: 999px;
+        border: 1px solid #ddd;
+        margin-right: 6px;
+        font-size: 12px;
+      }
+      pre {
+        height: 280px;
+        overflow: auto;
+        background: #0f0f0f;
+        color: #eee;
+        padding: 10px;
+        border-radius: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>WS Guard/Throttle Tester</h2>
+
+    <fieldset>
+      <legend>Connection</legend>
+      <div class="row">
+        <div>
+          <label>Server URL</label>
+          <input id="serverUrl" class="wide" value="http://localhost:3000" />
+        </div>
+        <div>
+          <label>Namespace</label>
+          <input id="ns" value="/ws" />
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label>User ID</label>
+          <input id="userId" value="1" />
+        </div>
+        <div>
+          <label>Auction ID</label>
+          <input id="auctionId" value="1" />
+        </div>
+        <div>
+          <label>Amount (for single bid)</label>
+          <input id="amount" value="1301" />
+        </div>
+      </div>
+      <div class="row">
+        <button id="connectBtn">Connect</button>
+        <button id="disconnectBtn">Disconnect</button>
+        <button id="joinBtn">Join Auction</button>
+        <button id="clearBtn">Clear Log</button>
+      </div>
+      <div class="row">
+        <span class="pill">socket: <span id="sid" class="muted">—</span></span>
+        <span class="pill">queued: <span id="cQueued" class="ok">0</span></span>
+        <span class="pill"
+          >rateLimited: <span id="cRL" class="warn">0</span></span
+        >
+        <span class="pill">errors: <span id="cErr" class="err">0</span></span>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Bidding</legend>
+      <div class="row">
+        <button id="oneBidBtn">Place ONE bid</button>
+      </div>
+
+      <div class="row">
+        <div>
+          <label>Burst count</label>
+          <input id="burstCount" class="num" value="20" />
+        </div>
+        <button id="burstBtn">Spam burst (immediate)</button>
+      </div>
+
+      <div class="row">
+        <div>
+          <label>Timed count</label>
+          <input id="timedCount" class="num" value="25" />
+        </div>
+        <div>
+          <label>Interval (ms)</label>
+          <input id="timedInterval" class="num" value="200" />
+        </div>
+        <button id="timedBtn">Spam timed (count × interval)</button>
+      </div>
+
+      <div class="row">
+        <div>
+          <label>Rate (req/s)</label>
+          <input id="rps" class="num" value="10" />
+        </div>
+        <button id="startFloodBtn">Start continuous flood</button>
+        <button id="stopFloodBtn">Stop</button>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Create Auction (HTTP)</legend>
+      <div class="row">
+        <div>
+          <label>Car ID</label>
+          <input id="carId" value="car-new-001" />
+        </div>
+        <div>
+          <label>Duration (minutes)</label>
+          <input id="minutes" class="num" value="30" />
+        </div>
+        <div>
+          <label>Starting Bid</label>
+          <input id="startingBid" class="num" value="1000" />
+        </div>
+        <button id="createBtn">Create Auction</button>
+      </div>
+    </fieldset>
+
+    <pre id="log" aria-live="polite"></pre>
+
+    <script>
+      let socket;
+      let floodTimer = null;
+
+      const el = (id) => document.getElementById(id);
+      const inc = (id) =>
+        (el(id).textContent = String(Number(el(id).textContent) + 1));
+      const setText = (id, v) => (el(id).textContent = String(v));
+
+      function log(label, data, cls = '') {
+        const ts = new Date().toLocaleTimeString();
+        const line = `[${ts}] ${label}${data ? ' → ' + JSON.stringify(data) : ''}\n`;
+        const pre = el('log');
+        const span = document.createElement('span');
+        if (cls) span.className = cls;
+        span.textContent = line;
+        pre.appendChild(span);
+        pre.scrollTop = pre.scrollHeight;
+      }
+
+      function connect() {
+        const base = el('serverUrl').value.trim();
+        const ns = el('ns').value.trim() || '/ws';
+        const userId = Number(el('userId').value || 1);
+
+        if (socket && socket.connected) socket.disconnect();
+
+        socket = io(base + ns, {
+          transports: ['websocket'],
+          auth: { userId },
+        });
+
+        socket.on('connect', () => {
+          setText('sid', socket.id);
+          log('connect', { id: socket.id }, 'ok');
+        });
+        socket.on('disconnect', (reason) => {
+          setText('sid', '—');
+          log('disconnect', { reason }, 'muted');
+        });
+        socket.on('connect_error', (err) =>
+          log('connect_error', { message: err.message }, 'err'),
+        );
+
+        // Server events
+        socket.on('currentHighest', (d) => log('currentHighest', d, 'muted'));
+        socket.on('bidQueued', (d) => {
+          inc('cQueued');
+          log('bidQueued', d, 'ok');
+        });
+        socket.on('bidUpdate', (d) => log('bidUpdate', d, 'ok'));
+        socket.on('auctionEnd', (d) => log('auctionEnd', d, 'ok'));
+        socket.on('bidError', (d) => {
+          inc('cErr');
+          log('bidError', d, 'err');
+        });
+
+        // Guard/interceptor events
+        socket.on('tooManyConnections', (d) => {
+          inc('cErr');
+          log('tooManyConnections', d, 'err');
+        });
+        socket.on('rateLimited', (d) => {
+          inc('cRL');
+          log('rateLimited', d, 'warn');
+        });
+
+        // Auto-join after connect
+        socket.on('connect', () => {
+          const auctionId = Number(el('auctionId').value || 1);
+          joinAuction(auctionId);
+        });
+      }
+
+      function disconnect() {
+        if (socket) socket.disconnect();
+        stopFlood();
+      }
+
+      function joinAuction(auctionId) {
+        if (!socket || !socket.connected)
+          return log('warn', 'not connected', 'warn');
+        socket.emit('joinAuction', { auctionId: Number(auctionId) });
+        log('emit joinAuction', { auctionId });
+      }
+
+      function placeBidOnce() {
+        if (!socket || !socket.connected)
+          return log('warn', 'not connected', 'warn');
+        const amount = Number(el('amount').value || 0);
+        const userId = Number(el('userId').value || 1);
+        const auctionId = Number(el('auctionId').value || 1);
+        socket.emit('placeBid', { auctionId, userId, amount });
+        log('emit placeBid', { auctionId, userId, amount });
+      }
+
+      function spamBurst() {
+        if (!socket || !socket.connected)
+          return log('warn', 'not connected', 'warn');
+        const n = Number(el('burstCount').value || 0);
+        const userId = Number(el('userId').value || 1);
+        const auctionId = Number(el('auctionId').value || 1);
+        const base = Number(el('amount').value || 0);
+        for (let i = 0; i < n; i++) {
+          const amount = base + i; // ensure they're valid, increasing bids
+          socket.emit('placeBid', { auctionId, userId, amount });
+        }
+        log('spamBurst sent', { count: n });
+      }
+
+      function spamTimed() {
+        if (!socket || !socket.connected)
+          return log('warn', 'not connected', 'warn');
+        const count = Number(el('timedCount').value || 0);
+        const interval = Number(el('timedInterval').value || 200);
+        const userId = Number(el('userId').value || 1);
+        const auctionId = Number(el('auctionId').value || 1);
+        const base = Number(el('amount').value || 0);
+        let sent = 0;
+        const t = setInterval(() => {
+          if (!socket || !socket.connected) return clearInterval(t);
+          if (sent >= count) return clearInterval(t);
+          const amount = base + sent;
+          socket.emit('placeBid', { auctionId, userId, amount });
+          sent++;
+        }, interval);
+        log('spamTimed started', { count, interval });
+      }
+
+      function startFlood() {
+        if (!socket || !socket.connected)
+          return log('warn', 'not connected', 'warn');
+        stopFlood();
+        const rps = Number(el('rps').value || 10);
+        if (rps <= 0) return;
+        const userId = Number(el('userId').value || 1);
+        const auctionId = Number(el('auctionId').value || 1);
+        let seq = 0;
+        const base = Number(el('amount').value || 0);
+        const interval = Math.max(1, Math.floor(1000 / rps));
+        floodTimer = setInterval(() => {
+          if (!socket || !socket.connected) return stopFlood();
+          const amount = base + seq++;
+          socket.emit('placeBid', { auctionId, userId, amount });
+        }, interval);
+        log('flood started', { rps, intervalMs: interval }, 'warn');
+      }
+
+      function stopFlood() {
+        if (floodTimer) clearInterval(floodTimer);
+        floodTimer = null;
+        log('flood stopped');
+      }
+
+      async function createAuction() {
+        const base = el('serverUrl').value.trim();
+        const carId = String(el('carId').value || 'car-new-001');
+        const minutes = Number(el('minutes').value || 30);
+        const startingBid = Number(el('startingBid').value || 1000);
+
+        try {
+          const res = await fetch(base + '/auctions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ carId, minutes, startingBid }),
+          });
+          const text = await res.text();
+          if (!res.ok) {
+            log('createAuction error', { status: res.status, text }, 'err');
+            return;
+          }
+          const auction = JSON.parse(text);
+          log('createdAuction', auction, 'ok');
+          el('auctionId').value = auction.id;
+          if (socket && socket.connected) joinAuction(auction.id);
+        } catch (e) {
+          log(
+            'createAuction fetch error',
+            { message: e?.message || String(e) },
+            'err',
+          );
+        }
+      }
+
+      // Bind UI
+      el('connectBtn').addEventListener('click', connect);
+      el('disconnectBtn').addEventListener('click', disconnect);
+      el('joinBtn').addEventListener('click', () =>
+        joinAuction(Number(el('auctionId').value || 1)),
+      );
+      el('clearBtn').addEventListener('click', () => {
+        el('log').textContent = '';
+        setText('cQueued', 0);
+        setText('cRL', 0);
+        setText('cErr', 0);
+      });
+
+      el('oneBidBtn').addEventListener('click', placeBidOnce);
+      el('burstBtn').addEventListener('click', spamBurst);
+      el('timedBtn').addEventListener('click', spamTimed);
+      el('startFloodBtn').addEventListener('click', startFlood);
+      el('stopFloodBtn').addEventListener('click', stopFlood);
+
+      el('createBtn').addEventListener('click', createAuction);
+    </script>
+  </body>
+</html>
