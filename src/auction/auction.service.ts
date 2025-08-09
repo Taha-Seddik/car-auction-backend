@@ -22,17 +22,22 @@ export class AuctionService {
     });
   }
 
-  create(data: {
-    carId: string;
-    startTime: Date;
-    endTime: Date;
-    startingBid: number;
-    status?: string;
-  }) {
-    return this.prisma.auction.create({
-      data: { ...data, status: data.status ?? 'active' },
-    });
-  }
+  async createAuction(input: { carId: string; minutes: number; startingBid: number }) {
+  const now = new Date();
+  const end = new Date(now.getTime() + input.minutes * 60_000);
+
+  const auction = await this.prisma.auction.create({
+    data: {
+      carId: input.carId,
+      startTime: now,
+      endTime: end,
+      startingBid: input.startingBid,
+      status: 'active',
+    },
+  });
+
+  return auction;
+}
 
   async placeBidTx(params: {
     auctionId: number;

@@ -40,7 +40,7 @@ export class AuctionGateway implements OnGatewayInit, OnGatewayDisconnect {
     // subscribe to Redis channel for this auction
     const channel = this.redis.channel(auctionId);
 
-    const handler = (message: string, chan: string) => {
+    const handler = (chan: string, message: string) => {
       if (chan !== channel) return;
       const evt = JSON.parse(message);
       if (evt.type === 'bidUpdate') {
