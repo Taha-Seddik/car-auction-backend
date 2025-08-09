@@ -63,55 +63,58 @@ Here’s a corrected, tidy **Project Structure** section that matches your repo:
 │  ├─ redis/
 │  │  └─ redis.service.ts               # cache + pub/sub
 │  └─ rabbitMq/
-│     ├─ rabbitmq.service.ts            # exchanges/queues helpers
-│     ├─ bid.producer.ts                # publish bid.place
-│     └─ bid.consumer.ts                # consume bids.process → placeBidTx
-└─ scripts/
-   └─ test-guard-throttle.js            # optional throttle demo
+│   ├─ rabbitmq.service.ts            # exchanges/queues helpers
+│   ├─ bid.producer.ts                # publish bid.place
+│   └─ bid.consumer.ts                # consume bids.process → placeBidTx
+└─ tests/
+   ├─ FunctionalityTest/
+   │ └─ index.html # connect/join/bid/end end-to-end demo
+   ├─ RaceTest/
+   │ └─ index.html # simultaneous bids race scenario
+   └─ BidsSpam/
+   └─ index.html # throttling / rate-limit spam test
+
 ```
-
-
-## DDoS/Spam Mitigation (simple & visible)
-
-- **Guard (`WsSecurityGuard`)**
-  - **Connection caps** per IP and per user (defaults: 3 each). On violation, emits `tooManyConnections` then disconnects.
-  - **Bid throttling** per user/IP: **5/sec** and **20/10s** (tweak constants). On violation, emits `rateLimited` and blocks the handler (no RMQ publish).
-
-- **Interceptor (`WsPayloadInterceptor`, optional)**
-  - Caps payload to **1KB** and validates minimal shape for `joinAuction` / `placeBid`.
-
-> These are per-process (simple for demo). For multi-instance production, replace the in-memory Maps with Redis counters/sets using the same keys.
-
----
 
 ## Assessment Tests (what to verify)
 
-1. **Create auction**  
-   Use the Create Auction form (or `POST /auctions`).
+Below are the manual checks I ran using the HTML clients in `/tests`. Each bullet links to a short description with screenshots.
 
-2. **WebSocket join + current price**  
-   Connect in two tabs; both receive `currentHighest` with the latest price.
+### 1) Create auction
+Use the **FunctionalityTest** page or `POST /auctions` to create an active auction.
+<table>
+<tr>
+<td><img alt="create auction form" src="https://github.com/user-attachments/assets/2f0d5920-f19f-47db-b0d7-367826f26b5c" width="100%"></td>
+<td><img alt="auction created response" src="https://github.com/user-attachments/assets/1add3837-787d-4661-b8c2-04a93ad660bb" width="100%"></td>
+</tr>
+</table>
 
-3. **Place bid updates both tabs**  
-   Place a bid in Tab A → both tabs receive `bidUpdate` broadcast.
+### 2) WebSocket join + current price
+Connect from two tabs and join the same auction room — both receive `currentHighest`.
+<img alt="ws join + current price" src="https://github.com/user-attachments/assets/2baf51e6-fe1c-4320-84df-065009ece1aa" width="100%">
 
-4. **End auction notification**  
-   Trigger `endAuction` → both tabs receive `auctionEnd { winnerId, amount }`.
+### 3) Place bid → both tabs update
+Placing a bid in one tab broadcasts `bidUpdate` to everyone in the room.
+<img alt="bid update broadcast" src="https://github.com/user-attachments/assets/aab916f8-9fbc-4bcc-805d-6bb384dc97b7" width="100%">
 
-5. **Race test**  
-   Fire two equal bids at the same time (two tabs). Exactly **one** wins;
-   loser is rejected by transaction logic. DB shows only one top bid row.
+### 4) End auction notification
+Trigger `endAuction` and all tabs receive `auctionEnd { winnerId, amount }`.
+<img alt="auction end broadcast" src="https://github.com/user-attachments/assets/dde2112d-7cbe-4560-98e3-28a94d32ab14" width="100%">
 
-6. **Guard test (connections)**  
-   Open 4 tabs with the same user and click **Connect**: in the 4th tab you get
-   `tooManyConnections { by: 'user', limit: 3 }` then a server disconnect.
+### 5) Race test (simultaneous bids)
+Two equal bids fired at the same time — exactly one wins (row lock + tx). DB shows one top row.
+<table>
+<tr>
+<td><img alt="race clients" src="https://github.com/user-attachments/assets/e999c748-3ffa-4d24-b5fe-8be2231443d4" width="100%"></td>
+<td><img alt="race result logs" src="https://github.com/user-attachments/assets/102615f4-bb22-466f-86c9-13867ad23f8c" width="100%"></td>
+</tr>
+</table>
 
-7. **Bids spam test**  
-   Spam bids (burst/timed/flood). You’ll see some `bidQueued`, then `rateLimited`.
-   RabbitMQ queue rate remains bounded; excess is blocked before enqueue.
+### 6) Guard test (connections)
+Open 4 tabs with the same user and click **Connect** — the 4th receives `tooManyConnections` then a server disconnect.
+<img alt="too many connections guard" src="https://github.com/user-attachments/assets/85d3ff59-effa-4846-b4a0-2a3107608210" width="60%">
 
-> Add your screenshots under each section in GitHub (RabbitMQ UI, Prisma Studio, browser logs).
-
----
-
+### 7) Bids spam test (throttling)
+Burst/timed/flood from **BidsSpam** — after a few `bidQueued`, the guard emits `rateLimited`. RMQ queue rate stays bounded.
+<img alt="bids spam throttling" src="https://github.com/user-attachments/assets/f930df46-6dc7-4b08-abac-ca81938285ad" width="100%">
 
