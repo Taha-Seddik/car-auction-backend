@@ -28,133 +28,48 @@ npx ts-node src/prisma/seed.ts
 npm run start:dev
 ```
 
-## Project Structure (important parts)
+Here’s a corrected, tidy **Project Structure** section that matches your repo:
+
+# Project Structure (important parts)
 
 ```
-src/
-  app.module.ts
-  main.ts
-
-  prisma/
-    prisma.service.ts
-    seed.ts
-
-  auction/
-    auction.controller.ts       # HTTP: create/get
-    auction.service.ts          # DB tx, redis cache/pub, end-auction
-    auction.gateway.ts          # WS events: joinAuction, placeBid, endAuction
-
-    interceptors/
-      ws-payload.interceptor.ts # (optional) size/shape filter
-
-    guards/
-      ws-security.guard.ts      # single guard: connection caps + bid throttling
-
-  redis/
-    redis.service.ts            # ioredis client + cache/pub/sub helpers
-
-  rabbitMq/
-    rabbitmq.service.ts         # exchanges/queues + publish/consume helpers
-    bid.producer.ts             # publishes bid messages (bid.place)
-    bid.consumer.ts             # consumes + calls auction.service.placeBidTx
-
-  prisma/schema.prisma          # User, Auction, Bid
-  generated/prisma/             # Prisma client output (if customized)
-
-scripts/
-  test-guard-throttle.js        # optional node test for throttling
-web/
-  index.html                    # simple browser test client (you created)
-```
----
-
-## Environment
-
-Create `.env` at the project root:
-
-```
-DATABASE_URL=postgresql://auction_user:auction_pass@localhost:5432/carauction
-REDIS_URL=redis://localhost:6379
-RABBITMQ_URL=amqp://auction_user:auction_pass@localhost:5672
-PORT=3000
+├─ docker-compose.yml
+├─ .env
+├─ prisma/
+│  └─ schema.prisma                     # User, Auction, Bid models
+├─ src/
+│  ├─ main.ts
+│  ├─ app.module.ts
+│  ├─ app.controller.ts
+│  ├─ auction/
+│  │  ├─ auction.controller.ts          # HTTP: create/get
+│  │  ├─ auction.gateway.ts             # WS: joinAuction, placeBid, endAuction
+│  │  ├─ auction.service.ts             # DB txns, Redis cache/pub, end logic
+│  │  └─ auction-closer.service.ts      # scheduled closer (auto-complete)
+│  ├─ bid/
+│  │  ├─ bid.controller.ts
+│  │  └─ bid.service.ts
+│  ├─ user/
+│  │  ├─ user.controller.ts
+│  │  └─ user.service.ts
+│  ├─ common/
+│  │  ├─ guards/
+│  │  │  └─ ws-security.guard.ts        # connection caps + bid throttling
+│  │  └─ interceptors/
+│  │     └─ ws-payload.interceptor.ts   # optional payload size/shape checks
+│  ├─ dto/                              # request/response DTOs
+│  ├─ prisma/
+│  │  └─ prisma.service.ts              # PrismaClient wrapper for Nest
+│  ├─ redis/
+│  │  └─ redis.service.ts               # cache + pub/sub
+│  └─ rabbitMq/
+│     ├─ rabbitmq.service.ts            # exchanges/queues helpers
+│     ├─ bid.producer.ts                # publish bid.place
+│     └─ bid.consumer.ts                # consume bids.process → placeBidTx
+└─ scripts/
+   └─ test-guard-throttle.js            # optional throttle demo
 ```
 
-> No quotes needed. Host `localhost` works because Nest runs on your host and the services are exposed by Docker.
-
----
-
-
-
-Quick checks:
-
-- **HTTP/WS**: `http://localhost:3000` (WS namespace `/ws`)
-- **RabbitMQ UI**: `http://localhost:15672` (default creds from compose)
-  - Queues: `bids.process`, `bids.dlq`, `notify.user`, `audit.log`
-- **Redis**: `redis-cli -u redis://localhost:6379 PING` → `PONG`
-- **DB**: `npx prisma studio`
-
----
-
-## WebSocket API (client → server)
-
-- `joinAuction` `{ auctionId }` → joins a Socket.IO room; server replies with `currentHighest`
-- `placeBid` `{ auctionId, userId, amount }` → enqueues via RabbitMQ; immediate `bidQueued`; later `bidUpdate` broadcast after processing
-- `endAuction` `{ auctionId }` → closes auction; emits `auctionEnd` to room
-
-### Server → client events
-
-- `currentHighest` `{ amount }`
-- `bidQueued` `{ ok: true }`
-- `bidUpdate` `{ amount, userId, ts }`
-- `auctionEnd` `{ winnerId, amount }`
-- `bidError` `{ message }`
-- **Guard/Interceptor**
-  - `tooManyConnections` `{ by: 'ip'|'user', limit }`
-  - `rateLimited` `{ perSec, per10s }`
-
----
-
-## HTTP API (minimal)
-
-- `POST /auctions`  
-  Body: `{ carId: string, minutes: number, startingBid: number }`  
-  → creates an **active** auction (ends at `now + minutes`)
-
-- `GET /auctions` / `GET /auctions/:id` (optional helper endpoints)
-
----
-
-## Concurrency & Messaging
-
-### PostgreSQL + Prisma
-- `placeBidTx` uses **row lock** (`SELECT … FOR UPDATE`) to serialize writers:
-  1) verify `active` + not expired
-  2) enforce `amount >= (currentHighestBid || startingBid) + 1`
-  3) `tx.bid.create()`
-  4) `tx.auction.update({ currentHighestBid })`
-- **After commit**: update Redis cache + publish Redis channel (`bidUpdate`)
-
-### Redis
-- **Cache**: `auction:{id}:highest` → current price (avoid DB reads)
-- **Pub/Sub**: channel per auction `chan:auction:{id}` → `bidUpdate` / `auctionEnd`
-- Gateway subscribes per room; broadcasts to all clients.
-
-### RabbitMQ
-- Exchanges:
-  - `bids` (direct) – bid processing
-  - `bids.dlx` (direct) – dead letters
-  - `notify` (fanout) – notifications
-  - `audit` (fanout) – audit events
-- Queues:
-  - `bids.process`  (bind `bids` with `bid.place`)
-  - `bids.dlq`      (bind `bids.dlx` with `bid.dead`)
-  - `notify.user`   (bind `notify`)
-  - `audit.log`     (bind `audit`)
-- Producer: publishes `{ auctionId, userId, amount }` to `bids` with `bid.place`
-- Consumer: runs `placeBidTx`; on success publishes to `notify` & `audit`
-- **Retries**: simple header `x-retry` (0..3). Business errors (too low, inactive, ended) are ACKed (no retry). Technical failures go to DLQ.
-
----
 
 ## DDoS/Spam Mitigation (simple & visible)
 
@@ -199,10 +114,4 @@ Quick checks:
 
 ---
 
-## Notes & Trade-offs
 
-- Guard & interceptor are intentionally **simple** (no extra deps) to keep code readable.
-- Row-lock keeps the transaction short; Redis work is after-commit to avoid timeouts.
-- Business rejections are **not retried**; only technical failures go to DLQ.
-- For multi-instance scale, swap in Redis for guard counters/sets.
-- A small `@nestjs/schedule` cron closes expired auctions automatically and publishes `auctionEnd`.
