@@ -1,98 +1,209 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Live Car Auction – MVP (NestJS + Socket.IO + Prisma + Redis + RabbitMQ)
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Minimum viable **live bidding** module that shows real-time bids, safe concurrency, and basic protection against spam / DDoS—built to the assessment brief.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+---
 
-## Description
+## Tech Stack
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+- **NestJS** (HTTP + WebSocket gateway)
+- **Socket.IO** (real-time events)
+- **PostgreSQL + Prisma** (data + transactions)
+- **Redis** (cache current price + pub/sub cross-instance)
+- **RabbitMQ** (reliable bid queueing + DLQ + notifications/audit)
+- **Docker Compose** (Postgres, Redis, RabbitMQ)
 
-## Project setup
+---
 
-```bash
-$ npm install
+## Project Structure (important bits)
+
+```
+src/
+  app.module.ts
+  main.ts
+
+  prisma/
+    prisma.service.ts
+    seed.ts
+
+  auction/
+    auction.controller.ts       # HTTP: create/get
+    auction.service.ts          # DB tx, redis cache/pub, end-auction
+    auction.gateway.ts          # WS events: joinAuction, placeBid, endAuction
+
+    interceptors/
+      ws-payload.interceptor.ts # (optional) size/shape filter
+
+    guards/
+      ws-security.guard.ts      # single guard: connection caps + bid throttling
+
+  redis/
+    redis.service.ts            # ioredis client + cache/pub/sub helpers
+
+  rabbitMq/
+    rabbitmq.service.ts         # exchanges/queues + publish/consume helpers
+    bid.producer.ts             # publishes bid messages (bid.place)
+    bid.consumer.ts             # consumes + calls auction.service.placeBidTx
+
+  prisma/schema.prisma          # User, Auction, Bid
+  generated/prisma/             # Prisma client output (if customized)
+
+scripts/
+  test-guard-throttle.js        # optional node test for throttling
+web/
+  index.html                    # simple browser test client (you created)
+```
+---
+
+## Environment
+
+Create `.env` at the project root:
+
+```
+DATABASE_URL=postgresql://auction_user:auction_pass@localhost:5432/carauction
+REDIS_URL=redis://localhost:6379
+RABBITMQ_URL=amqp://auction_user:auction_pass@localhost:5672
+PORT=3000
 ```
 
-## Compile and run the project
+> No quotes needed. Host `localhost` works because Nest runs on your host and the services are exposed by Docker.
+
+---
+
+## Run It (first boot)
 
 ```bash
-# development
-$ npm run start
+# 1) Infra
+docker compose up -d           # postgres:5432, redis:6379, rabbitmq:5672 (UI :15672)
 
-# watch mode
-$ npm run start:dev
+# 2) DB schema
+npx prisma migrate dev
 
-# production mode
-$ npm run start:prod
+# 3) Seed sample data (users, one auction, a couple of bids)
+npx ts-node src/prisma/seed.ts
+
+# 4) App
+npm run start:dev
 ```
 
-## Run tests
+Quick checks:
 
-```bash
-# unit tests
-$ npm run test
+- **HTTP/WS**: `http://localhost:3000` (WS namespace `/ws`)
+- **RabbitMQ UI**: `http://localhost:15672` (default creds from compose)
+  - Queues: `bids.process`, `bids.dlq`, `notify.user`, `audit.log`
+- **Redis**: `redis-cli -u redis://localhost:6379 PING` → `PONG`
+- **DB**: `npx prisma studio`
 
-# e2e tests
-$ npm run test:e2e
+---
 
-# test coverage
-$ npm run test:cov
-```
+## WebSocket API (client → server)
 
-## Deployment
+- `joinAuction` `{ auctionId }` → joins a Socket.IO room; server replies with `currentHighest`
+- `placeBid` `{ auctionId, userId, amount }` → enqueues via RabbitMQ; immediate `bidQueued`; later `bidUpdate` broadcast after processing
+- `endAuction` `{ auctionId }` → closes auction; emits `auctionEnd` to room
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+### Server → client events
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+- `currentHighest` `{ amount }`
+- `bidQueued` `{ ok: true }`
+- `bidUpdate` `{ amount, userId, ts }`
+- `auctionEnd` `{ winnerId, amount }`
+- `bidError` `{ message }`
+- **Guard/Interceptor**
+  - `tooManyConnections` `{ by: 'ip'|'user', limit }`
+  - `rateLimited` `{ perSec, per10s }`
 
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
+---
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+## HTTP API (minimal)
 
-## Resources
+- `POST /auctions`  
+  Body: `{ carId: string, minutes: number, startingBid: number }`  
+  → creates an **active** auction (ends at `now + minutes`)
 
-Check out a few resources that may come in handy when working with NestJS:
+- `GET /auctions` / `GET /auctions/:id` (optional helper endpoints)
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+---
 
-## Support
+## Concurrency & Messaging
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+### PostgreSQL + Prisma
+- `placeBidTx` uses **row lock** (`SELECT … FOR UPDATE`) to serialize writers:
+  1) verify `active` + not expired
+  2) enforce `amount >= (currentHighestBid || startingBid) + 1`
+  3) `tx.bid.create()`
+  4) `tx.auction.update({ currentHighestBid })`
+- **After commit**: update Redis cache + publish Redis channel (`bidUpdate`)
 
-## Stay in touch
+### Redis
+- **Cache**: `auction:{id}:highest` → current price (avoid DB reads)
+- **Pub/Sub**: channel per auction `chan:auction:{id}` → `bidUpdate` / `auctionEnd`
+- Gateway subscribes per room; broadcasts to all clients.
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+### RabbitMQ
+- Exchanges:
+  - `bids` (direct) – bid processing
+  - `bids.dlx` (direct) – dead letters
+  - `notify` (fanout) – notifications
+  - `audit` (fanout) – audit events
+- Queues:
+  - `bids.process`  (bind `bids` with `bid.place`)
+  - `bids.dlq`      (bind `bids.dlx` with `bid.dead`)
+  - `notify.user`   (bind `notify`)
+  - `audit.log`     (bind `audit`)
+- Producer: publishes `{ auctionId, userId, amount }` to `bids` with `bid.place`
+- Consumer: runs `placeBidTx`; on success publishes to `notify` & `audit`
+- **Retries**: simple header `x-retry` (0..3). Business errors (too low, inactive, ended) are ACKed (no retry). Technical failures go to DLQ.
 
-## License
+---
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+## DDoS/Spam Mitigation (simple & visible)
+
+- **Guard (`WsSecurityGuard`)**
+  - **Connection caps** per IP and per user (defaults: 3 each). On violation, emits `tooManyConnections` then disconnects.
+  - **Bid throttling** per user/IP: **5/sec** and **20/10s** (tweak constants). On violation, emits `rateLimited` and blocks the handler (no RMQ publish).
+
+- **Interceptor (`WsPayloadInterceptor`, optional)**
+  - Caps payload to **1KB** and validates minimal shape for `joinAuction` / `placeBid`.
+
+> These are per-process (simple for demo). For multi-instance production, replace the in-memory Maps with Redis counters/sets using the same keys.
+
+---
+
+## Assessment Tests (what to verify)
+
+1. **Create auction**  
+   Use the Create Auction form (or `POST /auctions`).
+
+2. **WebSocket join + current price**  
+   Connect in two tabs; both receive `currentHighest` with the latest price.
+
+3. **Place bid updates both tabs**  
+   Place a bid in Tab A → both tabs receive `bidUpdate` broadcast.
+
+4. **End auction notification**  
+   Trigger `endAuction` → both tabs receive `auctionEnd { winnerId, amount }`.
+
+5. **Race test**  
+   Fire two equal bids at the same time (two tabs). Exactly **one** wins;
+   loser is rejected by transaction logic. DB shows only one top bid row.
+
+6. **Guard test (connections)**  
+   Open 4 tabs with the same user and click **Connect**: in the 4th tab you get
+   `tooManyConnections { by: 'user', limit: 3 }` then a server disconnect.
+
+7. **Bids spam test**  
+   Spam bids (burst/timed/flood). You’ll see some `bidQueued`, then `rateLimited`.
+   RabbitMQ queue rate remains bounded; excess is blocked before enqueue.
+
+> Add your screenshots under each section in GitHub (RabbitMQ UI, Prisma Studio, browser logs).
+
+---
+
+## Notes & Trade-offs
+
+- Guard & interceptor are intentionally **simple** (no extra deps) to keep code readable.
+- Row-lock keeps the transaction short; Redis work is after-commit to avoid timeouts.
+- Business rejections are **not retried**; only technical failures go to DLQ.
+- For multi-instance scale, swap in Redis for guard counters/sets.
+- A small `@nestjs/schedule` cron closes expired auctions automatically and publishes `auctionEnd`.
